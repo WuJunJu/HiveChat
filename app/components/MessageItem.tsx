@@ -1,36 +1,55 @@
 import React, { useState, useEffect, memo, useMemo } from 'react';
-import { Message } from '@/types/llm';
+import { Message, MessageContent } from '@/types/llm';
 import { CopyToClipboard } from 'react-copy-to-clipboard';
-import { Button, Tooltip, message, Alert, Avatar, Popconfirm, Image as AntdImage } from "antd";
-import { CopyOutlined, SyncOutlined, DeleteOutlined, DownOutlined, CheckCircleOutlined, CloseCircleOutlined, SearchOutlined } from '@ant-design/icons';
+import { Button, Tooltip, message, Alert, Avatar, Popconfirm, Image as AntdImage, Input, Dropdown, Menu, Space } from "antd"; // Added Input, Dropdown, Menu, Space
+import { CopyOutlined, SyncOutlined, DeleteOutlined, DownOutlined, CheckCircleOutlined, CloseCircleOutlined, SearchOutlined, EditOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons'; // Added EditOutlined, LeftOutlined, RightOutlined
 import useModelListStore from '@/app/store/modelList';
 import ThinkingIcon from '@/app/images/thinking.svg';
 import MarkdownRender from '@/app/components/Markdown';
 import { useTranslations } from 'next-intl';
+import { Branch } from '@/app/store/chat'; // Import Branch type
 
-const MessageItem = memo((props: {
-  item: Message,
-  index: number,
+// Define MessageItemProps interface
+export interface MessageItemProps {
+  item: Message; // id should be number
+  index: number;
   isConsecutive: boolean;
-  role: 'assistant' | 'user' | 'system',
-  retryMessage: (index: number) => void,
-  deleteMessage: (index: number) => void
+  role: 'assistant' | 'user' | 'system';
+  retryMessage: (index: number) => void;
+  deleteMessage: (index: number) => void;
+  editMessageAndBranch?: (messageIndex: number, newContent: MessageContent) => void;
+  currentBranchId?: string | null;
+  allBranches?: Branch[];
+  switchBranch?: (branchId: string) => void;
+  precedingUserMessageForAIMessage?: { id: number; branchId: string; content: MessageContent } | null; // For AI message dropdown
 }
-) => {
+
+const MessageItem = memo((props: MessageItemProps) => {
   const t = useTranslations('Chat');
+  const { item, role, currentBranchId, allBranches, switchBranch, precedingUserMessageForAIMessage } = props;
   const { allProviderListByKey } = useModelListStore();
   const [images, setImages] = useState<string[]>([]);
   const [plainText, setPlainText] = useState('');
+
+  // State for editing
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedContent, setEditedContent] = useState('');
+
   useEffect(() => {
+    let currentPlainText = '';
     if (Array.isArray(props.item.content) && props.item.content.length > 0) {
-      const images = props.item.content.filter((item: any) => item.type === 'image').map((item: any) => item.data);
-      setImages(images);
-      const plainText = props.item.content.filter((i) => i.type === 'text').map((it) => it.text).join('')
-      setPlainText(plainText);
-    } else {
-      setPlainText(props.item.content as string);
+      const imagesContent = props.item.content.filter((item: any) => item.type === 'image').map((item: any) => item.data);
+      setImages(imagesContent);
+      currentPlainText = props.item.content.filter((i) => i.type === 'text').map((it) => it.text).join('');
+    } else if (typeof props.item.content === 'string') {
+      currentPlainText = props.item.content;
     }
-  }, [props.item]);
+    setPlainText(currentPlainText);
+    // Initialize editedContent only when not in editing mode to avoid overwriting user input
+    if (!isEditing) {
+      setEditedContent(currentPlainText);
+    }
+  }, [props.item, isEditing]); // Rerun if isEditing changes to reset content on cancel
 
   const ProviderAvatar = useMemo(() => {
     if (allProviderListByKey) {
@@ -195,11 +214,134 @@ const MessageItem = memo((props: {
               className='w-fit px-4 py-3 markdown-body !min-w-4 !bg-gray-100 text-base rounded-xl ml-10'
               style={{ maxWidth: '44rem' }}
             >
-              <MarkdownRender content={props.item.content.filter((i) => i.type === 'text').map((it) => it.text).join('')} />
+          <MarkdownRender content={plainText} />
             </div>}
-          <div className='invisible flex flex-row-reverse pr-1 mt-1 group-hover:visible'>
-            <Tooltip title={t('delete')}>
-              <Popconfirm
+
+          {/* User Message Branch Navigation (X/Y) */}
+          {role === 'user' && !isEditing && allBranches && switchBranch && item.id && (
+            () => {
+              const parentBranchOfCurrent = allBranches.find(b => b.id === item.branchId);
+              let originalForkPointMessageId: number | null = null;
+              if (parentBranchOfCurrent && parentBranchOfCurrent.forkedFromMessageId && parentBranchOfCurrent.parentBranchId) {
+                originalForkPointMessageId = parentBranchOfCurrent.forkedFromMessageId;
+              } else if (!parentBranchOfCurrent?.parentBranchId) { // This message is on a root branch, or its branch is the original
+                originalForkPointMessageId = item.id;
+              }
+
+
+              let versionBranches: Branch[] = [];
+              if (originalForkPointMessageId) {
+                 // Branches forked from the same original message OR from the current message itself
+                const branchesForkedFromOriginal = allBranches.filter(b => b.forkedFromMessageId === originalForkPointMessageId);
+                 // Include the branch of the original message if it exists and is not one of the forked ones
+                const originalMessageBranchId = allBranches.find(b => b.forkedFromMessageId === originalForkPointMessageId)?.parentBranchId;
+                const originalMessageBranch = originalMessageBranchId ? allBranches.find(b => b.id === originalMessageBranchId) : undefined;
+
+
+                versionBranches = [...branchesForkedFromOriginal];
+                if (originalMessageBranch && !versionBranches.some(vb => vb.id === originalMessageBranch.id)) {
+                  // Check if this original message branch itself contains the originalForkPointMessageId
+                  // This logic is a bit convoluted: trying to find the "true" original user message's branch
+                  // For now, let's simplify: if current message created forks, list them. If current message is a fork, list its siblings and parent.
+                }
+              }
+
+              // Simpler logic:
+              // 1. Branches forked FROM this user message (item.id)
+              const directlyForkedBranches = allBranches.filter(b => b.forkedFromMessageId === item.id);
+              // 2. If this message's branch is a fork itself, find its parent and siblings
+              const currentMsgBranch = allBranches.find(b => b.id === item.branchId);
+              let siblingAndParentBranches: Branch[] = [];
+              if (currentMsgBranch && currentMsgBranch.parentBranchId && currentMsgBranch.forkedFromMessageId !== null) {
+                const parentB = allBranches.find(b => b.id === currentMsgBranch.parentBranchId);
+                if (parentB) siblingAndParentBranches.push(parentB);
+                siblingAndParentBranches.push(...allBranches.filter(
+                  b => b.parentBranchId === currentMsgBranch.parentBranchId && b.id !== item.branchId && b.forkedFromMessageId === currentMsgBranch.forkedFromMessageId
+                ));
+              }
+
+              let relevantBranches = [...directlyForkedBranches];
+              if (currentMsgBranch) { // Add current message's branch
+                if (!relevantBranches.find(rb => rb.id === currentMsgBranch.id)) {
+                   relevantBranches.push(currentMsgBranch);
+                }
+              }
+              siblingAndParentBranches.forEach(spb => {
+                if (!relevantBranches.find(rb => rb.id === spb.id)) {
+                  relevantBranches.push(spb);
+                }
+              });
+
+              // Filter out duplicates and sort
+              const uniqueRelevantBranches = Array.from(new Set(relevantBranches.map(b => b.id)))
+                                                 .map(id => relevantBranches.find(b => b.id === id)!)
+                                                 .filter(Boolean)
+                                                 .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+              const totalVersions = uniqueRelevantBranches.length;
+              const currentIndex = uniqueRelevantBranches.findIndex(b => b.id === item.branchId);
+
+              if (totalVersions > 1) {
+                return (
+                  <Space size="small" className="ml-2 mt-1 text-xs text-gray-500">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<LeftOutlined />}
+                      disabled={currentIndex <= 0}
+                      onClick={() => switchBranch(uniqueRelevantBranches[currentIndex - 1].id)}
+                    />
+                    <span>{currentIndex + 1}/{totalVersions}</span>
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<RightOutlined />}
+                      disabled={currentIndex >= totalVersions - 1}
+                      onClick={() => switchBranch(uniqueRelevantBranches[currentIndex + 1].id)}
+                    />
+                  </Space>
+                );
+              }
+              return null;
+            }
+          )()}
+
+          {isEditing && role === 'user' && (
+            <div className="mt-2 w-full" style={{ maxWidth: '44rem' }}>
+              <Input.TextArea
+                value={editedContent}
+                onChange={(e) => setEditedContent(e.target.value)}
+                autoSize={{ minRows: 2, maxRows: 10 }}
+              />
+              <div className="flex justify-end gap-2 mt-2">
+                <Button size="small" onClick={() => setIsEditing(false)}>{t('cancel')}</Button>
+                <Button type="primary" size="small" onClick={() => {
+                  if (props.editMessageAndBranch) {
+                    // For now, editedContent is plain text.
+                    // If MessageContent needs to be structured (e.g., for images), this needs adjustment.
+                    props.editMessageAndBranch(props.index, editedContent);
+                  }
+                  setIsEditing(false);
+                }}>
+                  {t('save')}
+                </Button>
+              </div>
+            </div>
+          )}
+          {!isEditing && (
+            <div className='invisible flex flex-row-reverse pr-1 mt-1 group-hover:visible'>
+              {props.role === 'user' && props.editMessageAndBranch && (
+                <Tooltip title={t('edit')}>
+                  <Button type="text" size="small" onClick={() => {
+                    setEditedContent(plainText); // Initialize with current plain text
+                    setIsEditing(true);
+                  }}>
+                    <EditOutlined style={{ color: 'gray' }} />
+                  </Button>
+                </Tooltip>
+              )}
+              <Tooltip title={t('delete')}>
+                <Popconfirm
                 title={t('deleteNotice')}
                 description={t('currentMessageDelete')}
                 onConfirm={() => props.deleteMessage(props.index)}
@@ -230,7 +372,8 @@ const MessageItem = memo((props: {
                 </Button>
               </Tooltip>
             </CopyToClipboard>
-          </div>
+            </div>
+          )}
         </div>
       </div>
     </div>;
@@ -282,7 +425,22 @@ const MessageItem = memo((props: {
                     <MarkdownRender content={props.item.reasoninContent as string} />
                   </div>
                 </details>}
-              {typeof props.item.content === 'string' && <MarkdownRender content={props.item.content} />
+              {/* Assistant message content rendering */}
+              {images.length > 0 && props.item.content && Array.isArray(props.item.content) && (
+                 props.item.content.filter(part => part.type === 'image').map((part,idx) =>
+                    <AntdImage key={idx}
+                      className='cursor-pointer mb-2'
+                      src={(part as any).data} // Assuming image part has data
+                      preview={{ mask: false }}
+                      style={{ maxWidth: '250px', borderRadius: '4px', boxShadow: '3px 4px 7px 0px #dedede' }}
+                    />)
+              )}
+              {plainText && <MarkdownRender content={plainText} />}
+
+              {/* This part seems to be duplicated or conflicting with plainText rendering above.
+                  Keeping plainText rendering as primary for now.
+              */}
+              {/* {typeof props.item.content === 'string' && <MarkdownRender content={props.item.content} />
               }
 
               {
@@ -331,6 +489,66 @@ const MessageItem = memo((props: {
               }
             </div>
             <div className='invisible flex flex-row items-center pl-1 group-hover:visible'>
+              {/* AI Message Branch Dropdown */}
+              {role === 'assistant' && item.branchId && allBranches && switchBranch && (
+                () => {
+                  const aiMessageBranch = allBranches.find(b => b.id === item.branchId);
+                  let branchesForDropdown: Branch[] = [];
+
+                  if (aiMessageBranch) {
+                    if (aiMessageBranch.parentBranchId && aiMessageBranch.forkedFromMessageId !== null) {
+                      // This AI message is in a forked branch.
+                      // Show parent and all sibling branches (including this one).
+                      const parentBranch = allBranches.find(b => b.id === aiMessageBranch.parentBranchId);
+                      if (parentBranch) {
+                        branchesForDropdown.push(parentBranch);
+                      }
+                      const siblingBranches = allBranches.filter(
+                        b => b.parentBranchId === aiMessageBranch.parentBranchId && b.forkedFromMessageId === aiMessageBranch.forkedFromMessageId
+                      );
+                      siblingBranches.forEach(sb => {
+                        if (!branchesForDropdown.find(b => b.id === sb.id)) {
+                          branchesForDropdown.push(sb);
+                        }
+                      });
+                    } else {
+                      // This AI message is in a root branch (no parent).
+                      // Only show itself, or perhaps branches forked *from user messages within this root branch*.
+                      // For simplicity now, if it's a root branch, the "versions" are less clear for an AI message.
+                      // Let's ensure at least the current branch is listed if no clear fork point.
+                      // A more advanced logic might find user messages in this branch that have been forked.
+                      if (!branchesForDropdown.find(b => b.id === aiMessageBranch.id)) {
+                        branchesForDropdown.push(aiMessageBranch);
+                      }
+                    }
+                  }
+
+                  branchesForDropdown.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+                  if (branchesForDropdown.length > 1) {
+                    const menuItems = branchesForDropdown.map(branch => (
+                      <Menu.Item key={branch.id} onClick={() => { if (branch.id !== currentBranchId) switchBranch(branch.id); }}>
+                        {branch.name || `Branch ${branch.id.substring(0, 4)}`}{ (item.branchId === branch.id && currentBranchId === branch.id) ? ` (${t('current')})` : ""}
+                        {/* Visual cue for the branch this AI message actually belongs to, vs current active branch */}
+                        {/* For example, if current active branch is B1, but this A2 belongs to B2, mark B2 specially, and B1 as active. */}
+                        {/* For now, just marking if the item in dropdown is the currently viewed global activeBranchId */}
+                        {branch.id === currentBranchId && <CheckCircleOutlined style={{ marginLeft: '8px', color: 'green' }} />}
+                      </Menu.Item>
+                    ));
+                    return (
+                      <Dropdown overlay={<Menu>{menuItems}</Menu>} placement="topLeft">
+                        <Button type="text" size="small">
+                          <Space>
+                            <SyncOutlined style={{ color: 'gray' }} />
+                            <DownOutlined style={{ color: 'gray', fontSize: '10px' }} />
+                          </Space>
+                        </Button>
+                      </Dropdown>
+                    );
+                  }
+                  return null;
+                }
+              )()}
               <CopyToClipboard text={plainText} onCopy={() => {
                 message.success(t('copySuccess'));
               }}>

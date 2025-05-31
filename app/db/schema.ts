@@ -159,6 +159,15 @@ export const llmModels = pgTable("models", {
   })
 );
 
+export const branches = pgTable("branches", {
+  id: text("id").primaryKey().$defaultFn(() => nanoid()),
+  chatId: text("chatId").notNull().references(() => chats.id, { onDelete: "cascade" }),
+  name: text("name"),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  forkedFromMessageId: integer("forkedFromMessageId"),
+  parentBranchId: text("parentBranchId").references(() => branches.id, { onDelete: "set null" }), // Allows parent to be deleted without deleting child
+});
+
 export const avatarType = pgEnum('avatar_type', ['emoji', 'url', 'none']);
 export const historyType = pgEnum('history_type', ['all', 'count', 'none']);
 
@@ -222,6 +231,7 @@ export const messages = pgTable("messages", {
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
   deleteAt: timestamp('delete_at'),
+  branchId: text("branchId").references(() => branches.id, { onDelete: "cascade" }), // Initially nullable, can be made notNull later
 });
 
 export const bots = pgTable("bots", {

@@ -40,7 +40,26 @@ export const MessageList = (props: { chat_id: string }) => {
     stopChat,
     clearHistory,
     setIsUserScrolling,
+    // editMessageAndBranch, // This will be uncommented when available from useChat
+    // activeBranchId, // This will be from useChat, ultimately from useChatStore
+    // allBranches, // This will be from useChat, ultimately from useChatStore
+    // switchBranch, // This will be from useChat
   } = useChat(props.chat_id);
+
+  // Placeholder for editMessageAndBranch until it's implemented in useChat
+  const editMessageAndBranch = (messageIndex: number, newContent: any) => {
+    console.log("Attempting to edit message:", messageIndex, "New content:", newContent);
+    // Actual implementation will be in useChat and passed down
+  };
+
+  // Placeholders for branch related props from useChat/useChatStore
+  const activeBranchId = null; // Replace with actual from useChatStore via useChat
+  const allBranches = []; // Replace with actual from useChatStore via useChat
+  const switchBranch = (branchId: string) => {
+    console.log("Attempting to switch to branch:", branchId);
+    // Actual implementation will call useChatStore.setActiveBranch via useChat
+  };
+
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -143,19 +162,37 @@ export const MessageList = (props: { chat_id: string }) => {
       if (index === messageList.length - 1 && item.role === 'assistant' && responseStatus === 'pending') {
         showLine = true;
       }
+
+      let precedingUserMessageForAIMessage = null;
+      if (item.role === 'assistant' && index > 0) {
+        const prevMessage = messageList[index - 1];
+        if (prevMessage && prevMessage.role === 'user' && prevMessage.id) {
+          precedingUserMessageForAIMessage = {
+            id: prevMessage.id,
+            branchId: prevMessage.branchId || '', // Ensure branchId is a string
+            content: prevMessage.content,
+          };
+        }
+      }
+
       return (
         <MessageItem
           key={item.id || index}
           isConsecutive={showLine}
           role={item.role as 'assistant' | 'user' | 'system'}
-          item={item}
+          item={item} // item.id should be number as per Message type
           index={index}
           retryMessage={retryMessage}
           deleteMessage={deleteMessage}
+          editMessageAndBranch={editMessageAndBranch}
+          currentBranchId={activeBranchId}
+          allBranches={allBranches}
+          switchBranch={switchBranch}
+          precedingUserMessageForAIMessage={precedingUserMessageForAIMessage}
         />
       );
     });
-  }, [messageList, responseStatus, retryMessage, deleteMessage]);
+  }, [messageList, responseStatus, retryMessage, deleteMessage, editMessageAndBranch, activeBranchId, allBranches, switchBranch]);
 
   // Navigate to new chat
   const handleNewChat = useCallback(() => {
